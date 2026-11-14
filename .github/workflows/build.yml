@@ -24,7 +24,9 @@
 #   2) Runner self-hosted: ejecuta el workflow manualmente marcando
 #      "use_self_hosted=true" (requiere Delphi instalado en tu PC).
 #
-# Sin Delphi el build termina en verde con un aviso (no compila).
+# Sin Delphi el build termina en verde con un aviso y sube el artefacto
+# "build-info" (informe del estado). Cuando haya Delphi (secreto o runner
+# local) sube "AresGalaxy-Win32" con el Ares.exe compilado.
 # ============================================================
 
 name: Compilar AresGalaxy
@@ -202,4 +204,43 @@ jobs:
         with:
           name: AresGalaxy-Win32
           path: _output/*.exe
+          if-no-files-found: ignore
+
+      - name: Generar informe de build (cuando no hay compilador)
+        if: steps.dcc.outputs.found != 'true'
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:GITHUB_WORKSPACE '_build_info'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $runUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          $lines = @(
+            'BUILD DE ARESGALAXY - INFORME AUTOMATICO',
+            '========================================',
+            '',
+            'Este build NO genero Ares.exe porque el runner de GitHub no incluye el',
+            'compilador Delphi (no se puede instalar automaticamente y la version',
+            'gratuita Community Edition bloquea el compilador de linea de comandos).',
+            '',
+            'LO QUE SI SE HIZO EN ESTE BUILD:',
+            ' - Checkout del codigo: OK',
+            ' - Dependencias instaladas: FastMM4, TntUnicode, DSPack',
+            ' - Unidades clave verificadas: OK',
+            '',
+            'COMO OBTENER Ares.exe:',
+            ' 1) Crea el secreto DELPHI_SETUP_URL (Settings > Secrets and variables',
+            '    > Actions) con la URL de tu instalador/portable de Delphi (no CE).',
+            ' 2) O usa un runner self-hosted con Delphi instalado: Actions >',
+            '    Compilar AresGalaxy > Run workflow marcando use_self_hosted=true.',
+            '',
+            "Run de este build: $runUrl"
+          )
+          Set-Content -Path (Join-Path $dir 'INFORME-BUILD.txt') -Value $lines -Encoding UTF8
+          Write-Host 'Informe de build generado'
+
+      - name: Subir informe como artefacto
+        if: steps.dcc.outputs.found != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-info
+          path: _build_info/INFORME-BUILD.txt
           if-no-files-found: ignore
