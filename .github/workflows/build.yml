@@ -1,0 +1,140 @@
+# ============================================================
+# Compilar AresGalaxy (Windows, Win32)
+# ============================================================
+# Se ejecuta MANUALMENTE: pestana Actions -> "Compilar AresGalaxy" -> Run workflow.
+#
+# IMPORTANTE: los runners hospedados por GitHub NO incluyen Delphi.
+# Embarcadero no permite descargar el instalador sin una cuenta, por lo que
+# la compilacion necesita UNA de estas dos opciones:
+#
+#   1) Marcar "use_self_hosted = true"
+#      Requiere un runner self-hosted en tu PC con Delphi instalado
+#      (GitHub -> Settings -> Actions -> Runners -> New self-hosted runner).
+#
+#   2) Crear el secreto DELPHI_SETUP_URL (Settings -> Secrets -> Actions)
+#      con una URL de descarga de tu propio instalador/portable de Delphi.
+#      El workflow lo descarga, lo instala en silencio (/VERYSILENT) y compila.
+#
+# Las librerias que faltan en el repositorio (FastMM4, TntUnicode, DSPack y
+# Ares_VCLs) se descargan automaticamente en cada ejecucion.
+# ============================================================
+
+name: Compilar AresGalaxy
+
+on:
+  workflow_dispatch:
+    inputs:
+      use_self_hosted:
+        description: "Usar mi runner local (self-hosted) con Delphi ya instalado"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Compilar Ares.exe (Win32)
+    runs-on: ${{ inputs.use_self_hosted == true && 'self-hosted' || 'windows-latest' }}
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Descargar librerias externas (FastMM4, TntUnicode, DSPack, Ares_VCLs)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $libsDir = Join-Path $env:GITHUB_WORKSPACE '_libs'
+          New-Item -ItemType Directory -Force -Path $libsDir | Out-Null
+          $libs = @(
+            @{ name = 'FastMM4';    url = 'https://github.com/pleriche/FastMM4/archive/refs/heads/master.zip' },
+            @{ name = 'TntUnicode'; url = 'https://github.com/rofl0r/TntUnicode/archive/refs/heads/master.zip' },
+            @{ name = 'DSPack';     url = 'https://github.com/amikey/dspack/archive/refs/heads/master.zip' },
+            @{ name = 'ares_vcls';  url = 'https://downloads.sourceforge.net/project/aresgalaxy/aresgalaxy/Ares_VCLs/Ares_VCLs_011713.zip' }
+          )
+          foreach ($lib in $libs) {
+            $zip = Join-Path $env:RUNNER_TEMP ($lib.name + '.zip')
+            try {
+              Invoke-WebRequest -Uri $lib.url -OutFile $zip -UseBasicParsing
+              Expand-Archive -Path $zip -DestinationPath (Join-Path $libsDir $lib.name) -Force
+              Write-Host "[OK] $($lib.name) descargada y extraida"
+            } catch {
+              Write-Host "::warning::No se pudo descargar $($lib.name): $($_.Exception.Message)"
+            }
+          }
+
+      - name: Localizar Delphi (dcc32)
+        id: dcc
+        shell: pwsh
+        env:
+          DELPHI_SETUP_URL: ${{ secrets.DELPHI_SETUP_URL }}
+        run: |
+          $roots = @('C:\Program Files (x86)\Embarcadero', 'C:\Program Files\Embarcadero', 'C:\Program Files\Borland', 'C:\Borland')
+          $dcc = Get-ChildItem $roots -Recurse -Filter dcc32.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $dcc -and $env:DELPHI_SETUP_URL) {
+            Write-Host 'Descargando instalador de Delphi desde el secreto DELPHI_SETUP_URL...'
+            $setup = Join-Path $env:RUNNER_TEMP 'delphi_setup.exe'
+            Invoke-WebRequest -Uri $env:DELPHI_SETUP_URL -OutFile $setup -UseBasicParsing
+            Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-' -Wait
+            $dcc = Get-ChildItem $roots -Recurse -Filter dcc32.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $dcc) {
+            Write-Host '::error::No se encontro dcc32.exe en este runner.'
+            Write-Host 'Los runners hospedados por GitHub NO incluyen Delphi y no se puede instalar automaticamente sin cuenta de Embarcadero.'
+            Write-Host 'Opciones: (1) vuelve a ejecutar marcando use_self_hosted=true (requiere runner local con Delphi); (2) crea el secreto DELPHI_SETUP_URL con la URL de tu instalador de Delphi.'
+            exit 1
+          }
+          Write-Host "dcc32 encontrado: $dcc"
+          Add-Content -Path $env:GITHUB_ENV -Value "DCC32=$dcc"
+
+      - name: Preparar configuracion de compilacion (ci_build.cfg)
+        shell: pwsh
+        run: |
+          $ws = $env:GITHUB_WORKSPACE
+          $dccDir = Split-Path $env:DCC32 -Parent
+          $dccRoot = Split-Path $dccDir -Parent
+          $dirs = New-Object System.Collections.Generic.List[string]
+          $dirs.Add($ws)
+          $dirs.Add((Join-Path $ws 'VCLs'))
+          $libs = Join-Path $ws '_libs'
+          if (Test-Path $libs) {
+            Get-ChildItem $libs -Recurse -Filter *.pas -ErrorAction SilentlyContinue | ForEach-Object { $dirs.Add($_.DirectoryName) }
+          }
+          @("$dccRoot\lib", "$dccRoot\lib\win32\release", "$dccRoot\lib\Win32\release") | ForEach-Object {
+            if (Test-Path $_) { $dirs.Add($_) }
+          }
+          $dirs = $dirs | Select-Object -Unique
+          $lines = @('-B', '-E_output')
+          if ($dccRoot -match 'Embarcadero') {
+            $lines += '-NSSystem;Winapi;Vcl;System.Win;Data;Xml'
+          }
+          foreach ($d in $dirs) {
+            $lines += ('-U"' + $d + '"')
+            $lines += ('-I"' + $d + '"')
+          }
+          foreach ($d in @($ws, (Join-Path $ws 'VCLs'))) {
+            $lines += ('-R"' + $d + '"')
+          }
+          Set-Content -Path (Join-Path $ws 'ci_build.cfg') -Value $lines -Encoding ASCII
+          Write-Host ('Config generada con ' + $dirs.Count + ' rutas de busqueda de unidades')
+
+      - name: Compilar Ares.DPR
+        shell: pwsh
+        run: |
+          Set-Location $env:GITHUB_WORKSPACE
+          Write-Host "Compilando con: $env:DCC32"
+          & $env:DCC32 '@ci_build.cfg' 'Ares.DPR'
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::dcc32 termino con codigo $LASTEXITCODE. Revisa el log: las unidades faltantes aparecen como 'File not found' y los errores de codigo justo encima."
+            exit $LASTEXITCODE
+          }
+          Get-ChildItem '_output' -Filter *.exe -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "Generado: $($_.FullName)" }
+
+      - name: Subir Ares.exe como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: AresGalaxy-Win32
+          path: _output/*.exe
+          if-no-files-found: ignore
