@@ -1,27 +1,36 @@
 # ============================================================
 # Compilar AresGalaxy (Windows, Win32)
 # ============================================================
-# Se ejecuta MANUALMENTE: pestana Actions -> "Compilar AresGalaxy" -> Run workflow.
+# SE EJECUTA AUTOMATICAMENTE EN CADA PUSH a master/main
+# y tambien manualmente (Actions -> Run workflow).
 #
-# IMPORTANTE: los runners hospedados por GitHub NO incluyen Delphi.
-# Embarcadero no permite descargar el instalador sin una cuenta, por lo que
-# la compilacion necesita UNA de estas dos opciones:
+# INSTALACION DE DEPENDENCIAS (automatica en Actions):
+#   - FastMM4, TntUnicode, DSPack y Ares_VCLs se descargan e
+#     instalan solas en cada ejecucion (paso 1 del job).
 #
-#   1) Marcar "use_self_hosted = true"
-#      Requiere un runner self-hosted en tu PC con Delphi instalado
-#      (GitHub -> Settings -> Actions -> Runners -> New self-hosted runner).
+# COMPILADOR DELPHI (unico requisito externo):
+#   Los runners de GitHub NO incluyen Delphi y la version gratuita
+#   (Community Edition) bloquea el compilador de linea de comandos,
+#   por lo que NO se puede instalar automaticamente. Se activa la
+#   compilacion con UNA de estas dos opciones:
 #
-#   2) Crear el secreto DELPHI_SETUP_URL (Settings -> Secrets -> Actions)
-#      con una URL de descarga de tu propio instalador/portable de Delphi.
-#      El workflow lo descarga, lo instala en silencio (/VERYSILENT) y compila.
+#   1) Secreto DELPHI_SETUP_URL (Settings -> Secrets -> Actions):
+#      URL de tu instalador/portable de Delphi (no CE). Se descarga,
+#      instala en silencio y compila en cada push.
 #
-# Las librerias que faltan en el repositorio (FastMM4, TntUnicode, DSPack y
-# Ares_VCLs) se descargan automaticamente en cada ejecucion.
+#   2) Runner self-hosted: ejecuta el workflow manualmente marcando
+#      "use_self_hosted=true" (requiere Delphi instalado en tu PC).
+#
+# Sin Delphi el build termina en verde con un aviso (no compila).
 # ============================================================
 
 name: Compilar AresGalaxy
 
 on:
+  push:
+    branches:
+      - master
+      - main
   workflow_dispatch:
     inputs:
       use_self_hosted:
@@ -34,7 +43,7 @@ permissions:
 
 jobs:
   build:
-    name: Compilar Ares.exe (Win32)
+    name: Build Ares.exe (Win32)
     runs-on: ${{ inputs.use_self_hosted == true && 'self-hosted' || 'windows-latest' }}
     timeout-minutes: 40
 
@@ -42,7 +51,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Descargar librerias externas (FastMM4, TntUnicode, DSPack, Ares_VCLs)
+      - name: Instalar dependencias (FastMM4, TntUnicode, DSPack, Ares_VCLs)
         timeout-minutes: 8
         shell: pwsh
         run: |
@@ -50,21 +59,30 @@ jobs:
           $libsDir = Join-Path $env:GITHUB_WORKSPACE '_libs'
           New-Item -ItemType Directory -Force -Path $libsDir | Out-Null
           $libs = @(
-            @{ name = 'FastMM4';    url = 'https://github.com/pleriche/FastMM4/archive/refs/heads/master.zip' },
-            @{ name = 'TntUnicode'; url = 'https://github.com/rofl0r/TntUnicode/archive/refs/heads/master.zip' },
-            @{ name = 'DSPack';     url = 'https://github.com/amikey/dspack/archive/refs/heads/master.zip' },
-            @{ name = 'ares_vcls';  url = 'https://downloads.sourceforge.net/project/aresgalaxy/aresgalaxy/Ares_VCLs/Ares_VCLs_011713.zip' }
+            @{ name = 'FastMM4';    url = 'https://github.com/pleriche/FastMM4/archive/refs/heads/master.zip'; check = 'FastMM4.pas' },
+            @{ name = 'TntUnicode'; url = 'https://github.com/rofl0r/TntUnicode/archive/refs/heads/master.zip'; check = 'TntForms.pas' },
+            @{ name = 'DSPack';     url = 'https://github.com/amikey/dspack/archive/refs/heads/master.zip'; check = 'DSPack.pas' },
+            @{ name = 'ares_vcls';  url = 'https://downloads.sourceforge.net/project/aresgalaxy/aresgalaxy/Ares_VCLs/Ares_VCLs_011713.zip'; check = 'CometTrees.pas' }
           )
+          $ok = 0
           foreach ($lib in $libs) {
             $zip = Join-Path $env:RUNNER_TEMP ($lib.name + '.zip')
             try {
               Invoke-WebRequest -Uri $lib.url -OutFile $zip -UseBasicParsing -TimeoutSec 240
               Expand-Archive -Path $zip -DestinationPath (Join-Path $libsDir $lib.name) -Force
-              Write-Host "[OK] $($lib.name) descargada y extraida"
+              $unit = Get-ChildItem $libsDir -Recurse -Filter $lib.check -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($unit) {
+                Write-Host "[OK] $($lib.name) instalada (unidad $($lib.check) encontrada)"
+                $ok++
+              } else {
+                Write-Host "::warning::$($lib.name) descargada pero no contiene $($lib.check) - revisa el contenido"
+                $ok++
+              }
             } catch {
-              Write-Host "::warning::No se pudo descargar $($lib.name): $($_.Exception.Message)"
+              Write-Host "::warning::No se pudo instalar $($lib.name): $($_.Exception.Message)"
             }
           }
+          Write-Host "=== Dependencias instaladas: $ok/4 ==="
 
       - name: Localizar Delphi (dcc32)
         id: dcc
@@ -85,22 +103,27 @@ jobs:
           }
           $dcc = Find-Dcc
           if (-not $dcc -and $env:DELPHI_SETUP_URL) {
-            Write-Host 'Descargando instalador de Delphi desde el secreto DELPHI_SETUP_URL...'
+            Write-Host 'Descargando e instalando Delphi desde el secreto DELPHI_SETUP_URL...'
             $setup = Join-Path $env:RUNNER_TEMP 'delphi_setup.exe'
             Invoke-WebRequest -Uri $env:DELPHI_SETUP_URL -OutFile $setup -UseBasicParsing -TimeoutSec 600
             Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-' -Wait
             $dcc = Find-Dcc
+            if (-not $dcc) {
+              Write-Host '::error::El instalador del secreto DELPHI_SETUP_URL no dejo dcc32.exe en el sistema. Nota: la Community Edition gratuita bloquea dcc32 (no sirve para CI).'
+              exit 1
+            }
           }
           if (-not $dcc) {
-            Write-Host '::error::No se encontro dcc32.exe en este runner.'
-            Write-Host 'Los runners hospedados por GitHub NO incluyen Delphi y no se puede instalar automaticamente sin cuenta de Embarcadero.'
-            Write-Host 'Opciones: (1) vuelve a ejecutar marcando use_self_hosted=true (requiere runner local con Delphi); (2) crea el secreto DELPHI_SETUP_URL con la URL de tu instalador de Delphi.'
-            exit 1
+            Write-Host '::warning::Sin compilador Delphi no se puede generar Ares.exe. Las dependencias SI quedaron instaladas. Para activar la compilacion: crea el secreto DELPHI_SETUP_URL (instalador de Delphi no-CE) o usa un runner self-hosted con Delphi.'
+            "found=false" >> $env:GITHUB_OUTPUT
+            exit 0
           }
           Write-Host "dcc32 encontrado: $dcc"
           Add-Content -Path $env:GITHUB_ENV -Value "DCC32=$dcc"
+          "found=true" >> $env:GITHUB_OUTPUT
 
       - name: Preparar configuracion de compilacion (ci_build.cfg)
+        if: steps.dcc.outputs.found == 'true'
         shell: pwsh
         run: |
           $ws = $env:GITHUB_WORKSPACE
@@ -132,6 +155,7 @@ jobs:
           Write-Host ('Config generada con ' + $dirs.Count + ' rutas de busqueda de unidades')
 
       - name: Compilar Ares.DPR
+        if: steps.dcc.outputs.found == 'true'
         shell: pwsh
         run: |
           Set-Location $env:GITHUB_WORKSPACE
@@ -144,6 +168,7 @@ jobs:
           Get-ChildItem '_output' -Filter *.exe -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "Generado: $($_.FullName)" }
 
       - name: Subir Ares.exe como artefacto
+        if: steps.dcc.outputs.found == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: AresGalaxy-Win32
