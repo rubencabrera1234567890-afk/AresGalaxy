@@ -59,27 +59,47 @@ jobs:
           $libsDir = Join-Path $env:GITHUB_WORKSPACE '_libs'
           New-Item -ItemType Directory -Force -Path $libsDir | Out-Null
           $libs = @(
-            @{ name = 'FastMM4';    url = 'https://github.com/pleriche/FastMM4/archive/refs/heads/master.zip'; check = 'FastMM4.pas' },
-            @{ name = 'TntUnicode'; url = 'https://github.com/rofl0r/TntUnicode/archive/refs/heads/master.zip'; check = 'TntForms.pas' },
-            @{ name = 'DSPack';     url = 'https://github.com/amikey/dspack/archive/refs/heads/master.zip'; check = 'DSPack.pas' },
-            @{ name = 'ares_vcls';  url = 'https://downloads.sourceforge.net/project/aresgalaxy/aresgalaxy/Ares_VCLs/Ares_VCLs_011713.zip'; check = 'CometTrees.pas' }
+            @{ name = 'FastMM4';    check = 'FastMM4.pas';   urls = @('https://github.com/pleriche/FastMM4/archive/refs/heads/master.zip') },
+            @{ name = 'TntUnicode'; check = 'TntForms.pas';  urls = @('https://github.com/rofl0r/TntUnicode/archive/refs/heads/master.zip') },
+            @{ name = 'DSPack';     check = 'DSPack.pas';    urls = @('https://github.com/amikey/dspack/archive/refs/heads/master.zip') },
+            @{ name = 'ares_vcls';  check = 'CometTrees.pas'; urls = @(
+              'https://downloads.sourceforge.net/project/aresgalaxy/aresgalaxy/Ares_VCLs/Ares_VCLs_011713.zip',
+              'https://master.dl.sourceforge.net/project/aresgalaxy/aresgalaxy/Ares_VCLs/Ares_VCLs_011713.zip?viasf=1',
+              'https://phoenixnap.dl.sourceforge.net/project/aresgalaxy/aresgalaxy/Ares_VCLs/Ares_VCLs_011713.zip?viasf=1'
+            ) }
           )
           $ok = 0
           foreach ($lib in $libs) {
             $zip = Join-Path $env:RUNNER_TEMP ($lib.name + '.zip')
+            $descargado = $false
+            foreach ($url in $lib.urls) {
+              for ($i = 1; $i -le 2; $i++) {
+                try {
+                  Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 240
+                  $descargado = $true
+                  break
+                } catch {
+                  Write-Host "Intento $i fallido para $($lib.name) desde $url : $($_.Exception.Message)"
+                  Start-Sleep -Seconds 5
+                }
+              }
+              if ($descargado) { break }
+            }
+            if (-not $descargado) {
+              Write-Host "::warning::No se pudo instalar $($lib.name) tras todos los reintentos"
+              continue
+            }
             try {
-              Invoke-WebRequest -Uri $lib.url -OutFile $zip -UseBasicParsing -TimeoutSec 240
               Expand-Archive -Path $zip -DestinationPath (Join-Path $libsDir $lib.name) -Force
               $unit = Get-ChildItem $libsDir -Recurse -Filter $lib.check -ErrorAction SilentlyContinue | Select-Object -First 1
               if ($unit) {
                 Write-Host "[OK] $($lib.name) instalada (unidad $($lib.check) encontrada)"
-                $ok++
               } else {
                 Write-Host "::warning::$($lib.name) descargada pero no contiene $($lib.check) - revisa el contenido"
-                $ok++
               }
+              $ok++
             } catch {
-              Write-Host "::warning::No se pudo instalar $($lib.name): $($_.Exception.Message)"
+              Write-Host "::warning::No se pudo extraer $($lib.name): $($_.Exception.Message)"
             }
           }
           Write-Host "=== Dependencias instaladas: $ok/4 ==="
