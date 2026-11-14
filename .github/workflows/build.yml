@@ -5,8 +5,11 @@
 # y tambien manualmente (Actions -> Run workflow).
 #
 # INSTALACION DE DEPENDENCIAS (automatica en Actions):
-#   - FastMM4, TntUnicode, DSPack y Ares_VCLs se descargan e
-#     instalan solas en cada ejecucion (paso 1 del job).
+#   - FastMM4, TntUnicode y DSPack se descargan e instalan solas en
+#     cada ejecucion (paso 1 del job).
+#   - Los componentes propios de Ares (CometTrees, CometPageView, etc.)
+#     ya vienen incluidos en la carpeta VCLs/ del repositorio; el zip
+#     Ares_VCLs de SourceForge es redundante y no se descarga.
 #
 # COMPILADOR DELPHI (unico requisito externo):
 #   Los runners de GitHub NO incluyen Delphi y la version gratuita
@@ -51,7 +54,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Instalar dependencias (FastMM4, TntUnicode, DSPack, Ares_VCLs)
+      - name: Instalar dependencias (FastMM4, TntUnicode, DSPack)
         timeout-minutes: 8
         shell: pwsh
         run: |
@@ -71,12 +74,7 @@ jobs:
           $libs = @(
             @{ name = 'FastMM4';    check = 'FastMM4.pas';   urls = @('https://github.com/pleriche/FastMM4/archive/refs/heads/master.zip') },
             @{ name = 'TntUnicode'; check = 'TntForms.pas';  urls = @('https://github.com/rofl0r/TntUnicode/archive/refs/heads/master.zip') },
-            @{ name = 'DSPack';     check = 'DSPack.pas';    urls = @('https://github.com/amikey/dspack/archive/refs/heads/master.zip') },
-            @{ name = 'ares_vcls';  check = 'CometTrees.pas'; urls = @(
-              'https://downloads.sourceforge.net/project/aresgalaxy/aresgalaxy/Ares_VCLs/Ares_VCLs_011713.zip',
-              'https://master.dl.sourceforge.net/project/aresgalaxy/aresgalaxy/Ares_VCLs/Ares_VCLs_011713.zip?viasf=1',
-              'https://phoenixnap.dl.sourceforge.net/project/aresgalaxy/aresgalaxy/Ares_VCLs/Ares_VCLs_011713.zip?viasf=1'
-            ) }
+            @{ name = 'DSPack';     check = 'DSPack.pas';    urls = @('https://github.com/amikey/dspack/archive/refs/heads/master.zip') }
           )
           $ok = 0
           foreach ($lib in $libs) {
@@ -113,7 +111,7 @@ jobs:
               Write-Host "::warning::No se pudo extraer $($lib.name): $($_.Exception.Message)"
             }
           }
-          Write-Host "=== Dependencias instaladas: $ok/4 ==="
+          Write-Host "=== Dependencias instaladas: $ok/3 ==="
 
       - name: Localizar Delphi (dcc32)
         id: dcc
