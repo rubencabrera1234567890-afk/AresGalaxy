@@ -58,6 +58,16 @@ jobs:
           $ErrorActionPreference = 'Continue'
           $libsDir = Join-Path $env:GITHUB_WORKSPACE '_libs'
           New-Item -ItemType Directory -Force -Path $libsDir | Out-Null
+          function Test-ValidZip {
+            param([string]$Path)
+            try {
+              $fs = [System.IO.File]::OpenRead($Path)
+              $b = New-Object byte[] 4
+              $null = $fs.Read($b, 0, 4)
+              $fs.Close()
+              return ($b[0] -eq 0x50 -and $b[1] -eq 0x4B)
+            } catch { return $false }
+          }
           $libs = @(
             @{ name = 'FastMM4';    check = 'FastMM4.pas';   urls = @('https://github.com/pleriche/FastMM4/archive/refs/heads/master.zip') },
             @{ name = 'TntUnicode'; check = 'TntForms.pas';  urls = @('https://github.com/rofl0r/TntUnicode/archive/refs/heads/master.zip') },
@@ -76,6 +86,7 @@ jobs:
               for ($i = 1; $i -le 2; $i++) {
                 try {
                   Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 240
+                  if (-not (Test-ValidZip $zip)) { throw 'el archivo descargado no es un ZIP valido (posible pagina HTML del espejo)' }
                   $descargado = $true
                   break
                 } catch {
