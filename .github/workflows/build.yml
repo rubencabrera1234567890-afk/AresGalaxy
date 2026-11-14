@@ -43,6 +43,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Descargar librerias externas (FastMM4, TntUnicode, DSPack, Ares_VCLs)
+        timeout-minutes: 8
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
@@ -57,7 +58,7 @@ jobs:
           foreach ($lib in $libs) {
             $zip = Join-Path $env:RUNNER_TEMP ($lib.name + '.zip')
             try {
-              Invoke-WebRequest -Uri $lib.url -OutFile $zip -UseBasicParsing
+              Invoke-WebRequest -Uri $lib.url -OutFile $zip -UseBasicParsing -TimeoutSec 240
               Expand-Archive -Path $zip -DestinationPath (Join-Path $libsDir $lib.name) -Force
               Write-Host "[OK] $($lib.name) descargada y extraida"
             } catch {
@@ -67,18 +68,28 @@ jobs:
 
       - name: Localizar Delphi (dcc32)
         id: dcc
+        timeout-minutes: 6
         shell: pwsh
         env:
           DELPHI_SETUP_URL: ${{ secrets.DELPHI_SETUP_URL }}
         run: |
-          $roots = @('C:\Program Files (x86)\Embarcadero', 'C:\Program Files\Embarcadero', 'C:\Program Files\Borland', 'C:\Borland')
-          $dcc = Get-ChildItem $roots -Recurse -Filter dcc32.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          function Find-Dcc {
+            $found = $null
+            foreach ($r in @('C:\Program Files (x86)\Embarcadero', 'C:\Program Files\Embarcadero', 'C:\Program Files\Borland', 'C:\Borland')) {
+              if (Test-Path $r) {
+                $found = Get-ChildItem -Path $r -Recurse -Filter dcc32.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+                if ($found) { break }
+              }
+            }
+            return $found
+          }
+          $dcc = Find-Dcc
           if (-not $dcc -and $env:DELPHI_SETUP_URL) {
             Write-Host 'Descargando instalador de Delphi desde el secreto DELPHI_SETUP_URL...'
             $setup = Join-Path $env:RUNNER_TEMP 'delphi_setup.exe'
-            Invoke-WebRequest -Uri $env:DELPHI_SETUP_URL -OutFile $setup -UseBasicParsing
+            Invoke-WebRequest -Uri $env:DELPHI_SETUP_URL -OutFile $setup -UseBasicParsing -TimeoutSec 600
             Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-' -Wait
-            $dcc = Get-ChildItem $roots -Recurse -Filter dcc32.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+            $dcc = Find-Dcc
           }
           if (-not $dcc) {
             Write-Host '::error::No se encontro dcc32.exe en este runner.'
